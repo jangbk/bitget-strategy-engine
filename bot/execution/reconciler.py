@@ -2,7 +2,7 @@
 Reconciler — Position state reconciliation every 5 minutes (Part 3.3).
 
 Compares:
-  - Binance actual open positions (from /fapi/v2/positionRisk)
+  - Bitget actual open positions (via ccxt)
   - Local DB open live positions (from orders / positions table)
 
 Discrepancies handled:
@@ -74,7 +74,7 @@ class ReconcileResult:
 
 class Reconciler:
     """
-    Compares local DB positions against Binance API every 5 minutes.
+    Compares local DB positions against Bitget API every 5 minutes.
 
     Discrepancy handling:
       - DB-only positions    → mark CLOSED (exchange already closed them)
@@ -98,6 +98,16 @@ class Reconciler:
         self._last_result: Optional[ReconcileResult] = None
         self._run_count:   int = 0
         self._task:        Optional[asyncio.Task] = None
+
+    # ---------------------------------------------------------------------- #
+    # Symbol normalization
+    # ---------------------------------------------------------------------- #
+
+    def _normalize_symbol(self, raw_symbol: str) -> str:
+        """Normalize ccxt symbol to internal format. 'BTC/USDT:USDT' → 'BTCUSDT'"""
+        if "/" in raw_symbol:
+            return raw_symbol.split("/")[0] + "USDT"
+        return raw_symbol
 
     # ---------------------------------------------------------------------- #
     # Lifecycle
@@ -168,10 +178,12 @@ class Reconciler:
             return result
 
         # Build exchange position map: symbol → position dict
+        # Normalize ccxt symbols (e.g. 'BTC/USDT:USDT' → 'BTCUSDT')
         exchange_map: Dict[str, dict] = {}
         for pos in exchange_positions:
-            sym = pos.get("symbol", "")
-            if sym:
+            raw_sym = pos.get("symbol", "")
+            if raw_sym:
+                sym = self._normalize_symbol(raw_sym)
                 exchange_map[sym] = pos
 
         # --- Step 2: Get local DB open live positions ---
