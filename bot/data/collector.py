@@ -1,59 +1,55 @@
 """
-BinanceCollector — fetches candles, tickers, funding rates via REST + WebSocket.
+BitgetCollector — fetches candles, tickers, funding rates, open interest via ccxt (Bitget).
 
-REST endpoints used:
-  GET /fapi/v1/klines          — historical candles
-  GET /fapi/v1/premiumIndex    — mark price + funding rate
-  GET /fapi/v2/ticker/24hr     — 24h ticker
-  GET /fapi/v1/openInterest    — open interest
-
-WebSocket streams used:
-  <symbol>@aggTrade  (or @ticker) — real-time price
-  !miniTicker@arr                 — all-market mini-tickers
+All ccxt calls are synchronous and wrapped with asyncio.to_thread() to keep
+the async interface compatible with the rest of the engine.
 """
 
 import asyncio
-import json
 import logging
 import time
 from typing import Dict, List, Optional
 
-import httpx
-import websockets
-from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
-
-from bot.config import Config
+from bot.config import Config, create_exchange
 from bot.data.store import DataStore
 
 logger = logging.getLogger(__name__)
 
-RECONNECT_DELAY = 5   # seconds before WebSocket reconnect
-REST_TIMEOUT = 15     # seconds
 
-
-class BinanceCollector:
-    """Collects market data from Binance Futures and writes it to DataStore."""
+class BitgetCollector:
+    """Collects market data from Bitget Futures (via ccxt) and writes it to DataStore."""
 
     def __init__(self, config: Config, store: DataStore) -> None:
         self._config = config
         self._store = store
         self._running = False
-        self._http: Optional[httpx.AsyncClient] = None
+        self._exchange = None
         self._tasks: List[asyncio.Task] = []
 
-    # ---------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
+    # Symbol conversion
+    # ------------------------------------------------------------------ #
+
+    def _to_ccxt_symbol(self, symbol: str) -> str:
+        """Convert e.g. 'BTCUSDT' → 'BTC/USDT:USDT' for Bitget swap."""
+        base = symbol.replace("USDT", "")
+        return f"{base}/USDT:USDT"
+
+    # ------------------------------------------------------------------ #
     # Lifecycle
-    # ---------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
 
     async def start(self) -> None:
         if self._running:
             return
         self._running = True
-        self._http = httpx.AsyncClient(
-            base_url=self._config.binance_rest_base,
-            timeout=REST_TIMEOUT,
-        )
-        logger.info("BinanceCollector starting …")
+
+        logger.info("BitgetCollector starting …")
+
+        # Create exchange and load markets
+        self._exchange = create_exchange(self._config)
+        await asyncio.to_thread(self._exchange.load_markets)
+        logger.info("Bitget markets loaded (%d symbols).", len(self._exchange.markets))
 
         # Fetch historical candles for all symbols/intervals on startup
         await self._fetch_all_history()
@@ -61,28 +57,27 @@ class BinanceCollector:
         # Mark exchange as reachable
         self._store.set_exchange_status(True)
 
-        # Launch background tasks
+        # Launch background polling tasks
         self._tasks = [
             asyncio.create_task(self._rest_poller(), name="rest_poller"),
-            asyncio.create_task(self._ws_mini_ticker(), name="ws_mini_ticker"),
+            asyncio.create_task(self._ticker_poller(), name="ticker_poller"),
         ]
-        logger.info("BinanceCollector started.")
+        logger.info("BitgetCollector started.")
 
     async def stop(self) -> None:
         self._running = False
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
-        if self._http:
-            await self._http.aclose()
-        logger.info("BinanceCollector stopped.")
+        self._tasks.clear()
+        logger.info("BitgetCollector stopped.")
 
-    # ---------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
     # Historical REST fetch
-    # ---------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
 
     async def _fetch_all_history(self) -> None:
-        """Fetch candle history for every tracked symbol × interval."""
+        """Fetch candle history for every tracked symbol x interval."""
         coros = [
             self._fetch_candles(symbol, interval)
             for symbol in self._config.tracked_symbols
@@ -94,211 +89,145 @@ class BinanceCollector:
                 logger.error("History fetch error: %s", res)
 
     async def _fetch_candles(self, symbol: str, interval: str) -> None:
-        """Fetch historical klines and write to store."""
-        params = {
-            "symbol": symbol,
-            "interval": interval,
-            "limit": self._config.candle_limit,
-        }
+        """Fetch historical OHLCV candles and write to store."""
+        ccxt_sym = self._to_ccxt_symbol(symbol)
         try:
-            resp = await self._http.get("/fapi/v1/klines", params=params)
-            resp.raise_for_status()
-            raw: List[list] = resp.json()
+            raw = await asyncio.to_thread(
+                self._exchange.fetch_ohlcv,
+                ccxt_sym,
+                interval,
+                None,  # since
+                self._config.candle_limit,
+            )
         except Exception as exc:
             logger.error("Candle fetch failed %s/%s: %s", symbol, interval, exc)
             return
 
-        for kline in raw:
-            candle = _parse_kline(kline)
+        for row in raw:
+            candle = {
+                "ts": int(row[0]),
+                "o": float(row[1]),
+                "h": float(row[2]),
+                "l": float(row[3]),
+                "c": float(row[4]),
+                "v": float(row[5]),
+            }
             await self._store.upsert_candle(symbol, interval, candle)
 
-        logger.info(
-            "Fetched %d %s/%s candles from Binance REST", len(raw), symbol, interval
-        )
+        logger.info("Fetched %d %s/%s candles from Bitget", len(raw), symbol, interval)
 
-    # ---------------------------------------------------------------------- #
-    # REST poller (funding rates, open interest, tickers)
-    # ---------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
+    # Ticker fetch
+    # ------------------------------------------------------------------ #
 
-    async def _rest_poller(self) -> None:
-        """Periodically poll REST endpoints for funding / OI / 24h tickers."""
-        while self._running:
+    async def _fetch_tickers(self) -> None:
+        """Fetch latest ticker for each tracked symbol."""
+        for symbol in self._config.tracked_symbols:
+            ccxt_sym = self._to_ccxt_symbol(symbol)
             try:
-                await self._poll_once()
-            except Exception as exc:
-                logger.error("REST poll error: %s", exc)
-            await asyncio.sleep(self._config.ticker_update_interval_sec * 6)  # every 30 s
-
-    async def _poll_once(self) -> None:
-        symbols = self._config.tracked_symbols
-        tasks = [self._fetch_funding_and_ticker(s) for s in symbols]
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-    async def _fetch_funding_and_ticker(self, symbol: str) -> None:
-        # Premium index gives funding rate + mark price
-        try:
-            resp = await self._http.get(
-                "/fapi/v1/premiumIndex", params={"symbol": symbol}
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            funding = float(data.get("lastFundingRate", 0))
-            await self._store.update_funding(symbol, funding)
-        except Exception as exc:
-            logger.debug("Funding fetch %s: %s", symbol, exc)
-
-        # Open interest
-        try:
-            resp = await self._http.get(
-                "/fapi/v1/openInterest", params={"symbol": symbol}
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            oi = float(data.get("openInterest", 0))
-            await self._store.update_open_interest(symbol, oi)
-        except Exception as exc:
-            logger.debug("OI fetch %s: %s", symbol, exc)
-
-        # 24h ticker
-        try:
-            resp = await self._http.get(
-                "/fapi/v1/ticker/24hr", params={"symbol": symbol}
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            ticker = {
-                "symbol": symbol,
-                "ts": int(time.time() * 1000),
-                "price": float(data.get("lastPrice", 0)),
-                "volume_24h": float(data.get("quoteVolume", 0)),
-                "change_pct": float(data.get("priceChangePercent", 0)),
-            }
-            await self._store.update_ticker(symbol, ticker)
-        except Exception as exc:
-            logger.debug("Ticker fetch %s: %s", symbol, exc)
-
-    # ---------------------------------------------------------------------- #
-    # WebSocket — mini ticker stream (all symbols real-time)
-    # ---------------------------------------------------------------------- #
-
-    async def _ws_mini_ticker(self) -> None:
-        """Subscribe to !miniTicker@arr for real-time price updates."""
-        url = f"{self._config.binance_ws_base}/stream?streams=!miniTicker@arr"
-        symbols_set = set(self._config.tracked_symbols)
-
-        while self._running:
-            try:
-                logger.info("WebSocket connecting: %s", url)
-                async with websockets.connect(url, ping_interval=20, ping_timeout=30) as ws:
-                    self._store.set_exchange_status(True)
-                    logger.info("WebSocket connected.")
-                    async for message in ws:
-                        if not self._running:
-                            break
-                        await self._handle_mini_ticker(message, symbols_set)
-            except (ConnectionClosedError, ConnectionClosedOK) as exc:
-                logger.warning("WebSocket closed: %s — reconnecting in %ds", exc, RECONNECT_DELAY)
-            except asyncio.CancelledError:
-                break
-            except Exception as exc:
-                logger.error("WebSocket error: %s — reconnecting in %ds", exc, RECONNECT_DELAY)
-                self._store.set_exchange_status(False)
-
-            if self._running:
-                await asyncio.sleep(RECONNECT_DELAY)
-
-    async def _handle_mini_ticker(self, message: str, symbols_set: set) -> None:
-        try:
-            data = json.loads(message)
-            # data is {"stream": "...", "data": [...]}
-            items = data.get("data", data) if isinstance(data, dict) else data
-            if not isinstance(items, list):
-                return
-            for item in items:
-                symbol = item.get("s", "")
-                if symbol not in symbols_set:
-                    continue
+                data = await asyncio.to_thread(self._exchange.fetch_ticker, ccxt_sym)
                 ticker = {
                     "symbol": symbol,
-                    "ts": item.get("E", int(time.time() * 1000)),
-                    "price": float(item.get("c", 0)),
-                    "volume_24h": float(item.get("q", 0)),
-                    "change_pct": _calc_change_pct(
-                        float(item.get("o", 0)), float(item.get("c", 0))
-                    ),
+                    "ts": int(data.get("timestamp") or time.time() * 1000),
+                    "price": float(data.get("last") or 0),
+                    "volume_24h": float(data.get("quoteVolume") or 0),
+                    "change_pct": float(data.get("percentage") or 0),
                 }
                 await self._store.update_ticker(symbol, ticker)
-        except Exception as exc:
-            logger.debug("Mini-ticker parse error: %s", exc)
+            except Exception as exc:
+                logger.warning("Ticker fetch %s: %s", symbol, exc)
 
-    # ---------------------------------------------------------------------- #
-    # Live candle updates via WebSocket (kline stream)
-    # ---------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
+    # Funding rate fetch
+    # ------------------------------------------------------------------ #
 
-    async def start_kline_streams(self) -> None:
-        """Subscribe to kline streams for real-time candle updates."""
-        streams = [
-            f"{s.lower()}@kline_{i}"
-            for s in self._config.tracked_symbols
-            for i in self._config.candle_intervals
-        ]
-        url = (
-            f"{self._config.binance_ws_base}/stream?streams=" + "/".join(streams)
-        )
+    async def _fetch_funding_rates(self) -> None:
+        """Fetch current funding rate for each tracked symbol."""
+        for symbol in self._config.tracked_symbols:
+            ccxt_sym = self._to_ccxt_symbol(symbol)
+            try:
+                data = await asyncio.to_thread(self._exchange.fetch_funding_rate, ccxt_sym)
+                rate = float(data.get("fundingRate") or 0)
+                await self._store.update_funding(symbol, rate)
+            except Exception as exc:
+                logger.warning("Funding rate fetch %s: %s", symbol, exc)
 
+    # ------------------------------------------------------------------ #
+    # Open interest fetch
+    # ------------------------------------------------------------------ #
+
+    async def _fetch_open_interest(self) -> None:
+        """Fetch open interest for each tracked symbol."""
+        for symbol in self._config.tracked_symbols:
+            ccxt_sym = self._to_ccxt_symbol(symbol)
+            try:
+                data = await asyncio.to_thread(self._exchange.fetch_open_interest, ccxt_sym)
+                oi = float(data.get("openInterestAmount") or data.get("openInterest") or 0)
+                await self._store.update_open_interest(symbol, oi)
+            except Exception as exc:
+                logger.warning("OI fetch %s: %s", symbol, exc)
+
+    # ------------------------------------------------------------------ #
+    # Background pollers
+    # ------------------------------------------------------------------ #
+
+    async def _rest_poller(self) -> None:
+        """Periodically poll candles, funding rates, and open interest (every 60s)."""
         while self._running:
             try:
-                async with websockets.connect(url, ping_interval=20, ping_timeout=30) as ws:
-                    logger.info("Kline stream connected (%d streams)", len(streams))
-                    async for message in ws:
-                        if not self._running:
-                            break
-                        await self._handle_kline(message)
-            except asyncio.CancelledError:
-                break
+                await self._fetch_all_history()
+                await self._fetch_funding_rates()
+                await self._fetch_open_interest()
             except Exception as exc:
-                logger.error("Kline stream error: %s — reconnecting in %ds", exc, RECONNECT_DELAY)
-            if self._running:
-                await asyncio.sleep(RECONNECT_DELAY)
+                logger.error("REST poll error: %s", exc)
+            await asyncio.sleep(60)
 
-    async def _handle_kline(self, message: str) -> None:
+    async def _ticker_poller(self) -> None:
+        """Periodically poll tickers at configured interval."""
+        while self._running:
+            try:
+                await self._fetch_tickers()
+            except Exception as exc:
+                logger.error("Ticker poll error: %s", exc)
+            await asyncio.sleep(self._config.ticker_update_interval_sec)
+
+    # ------------------------------------------------------------------ #
+    # Public methods for Reconciler / other components
+    # ------------------------------------------------------------------ #
+
+    async def fetch_positions(self) -> List[dict]:
+        """Fetch open positions from Bitget. Returns list of position dicts."""
+        positions = []
         try:
-            data = json.loads(message)
-            kline_data = data.get("data", {}).get("k", {})
-            if not kline_data:
-                return
-            symbol = kline_data.get("s", "")
-            interval = kline_data.get("i", "")
-            candle = {
-                "ts": int(kline_data.get("t", 0)),
-                "o": float(kline_data.get("o", 0)),
-                "h": float(kline_data.get("h", 0)),
-                "l": float(kline_data.get("l", 0)),
-                "c": float(kline_data.get("c", 0)),
-                "v": float(kline_data.get("v", 0)),
-            }
-            await self._store.upsert_candle(symbol, interval, candle)
+            raw = await asyncio.to_thread(self._exchange.fetch_positions)
+            for pos in raw:
+                # Only include positions with non-zero size
+                contracts = float(pos.get("contracts") or 0)
+                if contracts == 0:
+                    continue
+                positions.append({
+                    "symbol": pos.get("symbol", ""),
+                    "side": pos.get("side", ""),
+                    "contracts": contracts,
+                    "entryPrice": float(pos.get("entryPrice") or 0),
+                    "unrealizedPnl": float(pos.get("unrealizedPnl") or 0),
+                    "leverage": float(pos.get("leverage") or 1),
+                    "notional": float(pos.get("notional") or 0),
+                })
         except Exception as exc:
-            logger.debug("Kline parse error: %s", exc)
+            logger.warning("fetch_positions error: %s", exc)
+        return positions
+
+    async def fetch_balance(self) -> float:
+        """Fetch USDT balance from Bitget. Returns float."""
+        try:
+            balance = await asyncio.to_thread(self._exchange.fetch_balance)
+            usdt = balance.get("USDT", {})
+            return float(usdt.get("total") or 0)
+        except Exception as exc:
+            logger.warning("fetch_balance error: %s", exc)
+            return 0.0
 
 
-# --------------------------------------------------------------------------- #
-# Helpers
-# --------------------------------------------------------------------------- #
-
-def _parse_kline(kline: list) -> dict:
-    """Convert Binance REST kline array to candle dict."""
-    return {
-        "ts": int(kline[0]),
-        "o": float(kline[1]),
-        "h": float(kline[2]),
-        "l": float(kline[3]),
-        "c": float(kline[4]),
-        "v": float(kline[5]),
-    }
-
-
-def _calc_change_pct(open_price: float, close_price: float) -> float:
-    if open_price == 0:
-        return 0.0
-    return round((close_price - open_price) / open_price * 100, 4)
+# Keep backward-compatible alias so existing imports still work
+BinanceCollector = BitgetCollector
