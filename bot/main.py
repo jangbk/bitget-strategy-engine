@@ -5,7 +5,7 @@ Starts all components:
   Phase 1:
     1. Database init
     2. DataStore
-    3. BinanceCollector (REST + WebSocket)
+    3. BitgetCollector (REST + WebSocket)
     4. RegimeDetector (polling loop)
     5. Dashboard (FastAPI + uvicorn in background thread)
     6. TelegramNotifier
@@ -17,7 +17,7 @@ Starts all components:
     8. KillSwitch       — emergency stop
     9. OrderStateMachine — order lifecycle tracking
    10. RiskManager      — pre-trade risk checks
-   11. Executor         — Binance Futures order execution
+   11. Executor         — Bitget Futures order execution (via ccxt)
    12. Reconciler       — position reconciliation every 5 min
 
   Phase 4 (additions):
@@ -39,7 +39,7 @@ from typing import Optional
 import uvicorn
 
 from bot.config import get_config
-from bot.data.collector import BinanceCollector
+from bot.data.collector import BitgetCollector
 from bot.data.store import DataStore
 from bot.data.validation_dataset_loader import ValidationDatasetLoader
 from bot.data.validation_replay import ValidationReplaySession
@@ -77,7 +77,7 @@ logger = logging.getLogger(__name__)
 # How often to re-run regime detection AND strategy evaluation (seconds)
 REGIME_DETECTION_INTERVAL = 60
 
-# How often to refresh account balance from Binance (seconds)
+# How often to refresh account balance from Bitget (seconds)
 BALANCE_REFRESH_INTERVAL = 60
 
 
@@ -99,7 +99,7 @@ class Engine:
     def __init__(self) -> None:
         self._config = get_config()
         self._store: Optional[DataStore] = None
-        self._collector: Optional[BinanceCollector] = None
+        self._collector: Optional[BitgetCollector] = None
         self._detector: Optional[RegimeDetector] = None
         self._fast_layer: Optional[FastLayer] = None
         self._approval_manager: Optional[ApprovalManager] = None
@@ -200,10 +200,10 @@ class Engine:
 
         # 4. Collector
         if not offline_validation_mode:
-            self._collector = BinanceCollector(self._config, self._store)
+            self._collector = BitgetCollector(self._config, self._store)
             await self._collector.start()
         else:
-            logger.info("Offline validation dataset mode enabled — skipping live Binance collector startup.")
+            logger.info("Offline validation dataset mode enabled — skipping live Bitget collector startup.")
 
         # 5. Regime Detector + Fast Layer
         self._detector = RegimeDetector(self._store)
@@ -251,7 +251,11 @@ class Engine:
             )
             await self._executor.start()
             self._kill_switch.set_executor(self._executor)
-            logger.info("Executor initialized. Testnet=%s", self._config.binance_testnet)
+            logger.info("Executor initialized. Demo=%s", self._config.bitget_demo)
+
+            # Set leverage for all tracked symbols
+            for symbol in self._config.tracked_symbols:
+                await self._executor.set_leverage(symbol, leverage=3)
 
             # 11. Phase 3: Reconciler
             self._reconciler = Reconciler(
@@ -520,7 +524,7 @@ class Engine:
                 )
 
     async def _refresh_balance(self) -> None:
-        """Fetch and cache account balance from Binance."""
+        """Fetch and cache account balance from Bitget."""
         if self._executor is None:
             return
         try:
@@ -554,7 +558,7 @@ class Engine:
             """인라인 키보드 컨트롤박스 전송."""
             mode = self._store.get_system_mode() if self._store else "OBSERVE"
             ks   = self._kill_switch.is_active if self._kill_switch else False
-            net  = "테스트넷" if self._config.binance_testnet else "실전"
+            net  = "데모" if self._config.bitget_demo else "실전"
             keyboard = {
                 "inline_keyboard": [
                     [
@@ -712,7 +716,7 @@ class Engine:
                                 wpnl     = self._store.get_weekly_pnl()
                                 sign_d   = "+" if dpnl >= 0 else ""
                                 sign_w   = "+" if wpnl >= 0 else ""
-                                net_str  = "테스트넷" if self._config.binance_testnet else "실전"
+                                net_str  = "데모" if self._config.bitget_demo else "실전"
                                 await self._telegram.send_message(
                                     f"*💰 잔고 현황* ({net_str})\n\n"
                                     f"잔고: `{balance:.2f} USDT`\n"
@@ -966,7 +970,7 @@ class Engine:
                             wpnl     = self._store.get_weekly_pnl()
                             sign_d   = "+" if dpnl >= 0 else ""
                             sign_w   = "+" if wpnl >= 0 else ""
-                            network  = "테스트넷" if self._config.binance_testnet else "실전"
+                            network  = "데모" if self._config.bitget_demo else "실전"
                             await self._telegram.send_message(
                                 f"*💰 잔고 현황* ({network})\n\n"
                                 f"잔고: `{balance:.2f} USDT`\n"
