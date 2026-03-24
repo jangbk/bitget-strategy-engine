@@ -45,19 +45,11 @@ def _get_list(key: str, default: str = "") -> List[str]:
 
 @dataclass
 class Config:
-    # Binance Testnet
-    binance_api_key: str = field(default_factory=lambda: _get("BINANCE_API_KEY"))
-    binance_api_secret: str = field(default_factory=lambda: _get("BINANCE_API_SECRET"))
-    binance_testnet: bool = field(default_factory=lambda: _get_bool("BINANCE_TESTNET", True))
-
-    # Binance Mainnet
-    binance_mainnet_api_key: str = field(default_factory=lambda: _get("BINANCE_MAINNET_API_KEY"))
-    binance_mainnet_api_secret: str = field(default_factory=lambda: _get("BINANCE_MAINNET_API_SECRET"))
-
-    # Hyperliquid
-    hyperliquid_wallet_address: str = field(default_factory=lambda: _get("HYPERLIQUID_WALLET_ADDRESS"))
-    hyperliquid_private_key: str = field(default_factory=lambda: _get("HYPERLIQUID_PRIVATE_KEY"))
-    hyperliquid_enabled: bool = field(default_factory=lambda: _get_bool("HYPERLIQUID_ENABLED", False))
+    # Bitget
+    bitget_api_key: str = field(default_factory=lambda: _get("BITGET_API_KEY"))
+    bitget_api_secret: str = field(default_factory=lambda: _get("BITGET_API_SECRET"))
+    bitget_api_passphrase: str = field(default_factory=lambda: _get("BITGET_API_PASSPHRASE"))
+    bitget_demo: bool = field(default_factory=lambda: _get_bool("BITGET_DEMO", True))
 
     # Telegram
     telegram_bot_token: str = field(default_factory=lambda: _get("TELEGRAM_BOT_TOKEN"))
@@ -131,33 +123,13 @@ class Config:
     )
     candle_limit: int = field(default_factory=lambda: _get_int("CANDLE_LIMIT", 200))
 
-    @property
-    def binance_rest_base(self) -> str:
-        if self.binance_testnet:
-            return "https://testnet.binancefuture.com"
-        return "https://fapi.binance.com"
-
-    @property
-    def binance_ws_base(self) -> str:
-        if self.binance_testnet:
-            return "wss://stream.binancefuture.com"
-        return "wss://fstream.binance.com"
-
-    @property
-    def active_binance_api_key(self) -> str:
-        if not self.binance_testnet and self.binance_mainnet_api_key:
-            return self.binance_mainnet_api_key
-        return self.binance_api_key
-
-    @property
-    def active_binance_api_secret(self) -> str:
-        if not self.binance_testnet and self.binance_mainnet_api_secret:
-            return self.binance_mainnet_api_secret
-        return self.binance_api_secret
-
     def validate(self) -> None:
-        if not self.binance_api_key:
-            logger.warning("BINANCE_API_KEY is not set")
+        if not self.bitget_api_key:
+            logger.warning("BITGET_API_KEY is not set")
+        if not self.bitget_api_secret:
+            logger.warning("BITGET_API_SECRET is not set")
+        if not self.bitget_api_passphrase:
+            logger.warning("BITGET_API_PASSPHRASE is not set; required for Bitget API")
         if not self.telegram_bot_token:
             logger.warning("TELEGRAM_BOT_TOKEN is not set; Telegram alerts disabled")
 
@@ -203,3 +175,19 @@ def get_config() -> Config:
         _config = Config()
         _config.validate()
     return _config
+
+
+def create_exchange(config: Config):
+    """Create and return a ccxt Bitget exchange instance."""
+    import ccxt
+    exchange = ccxt.bitget({
+        'apiKey': config.bitget_api_key,
+        'secret': config.bitget_api_secret,
+        'password': config.bitget_api_passphrase,
+        'options': {
+            'defaultType': 'swap',
+        },
+    })
+    if config.bitget_demo:
+        exchange.set_sandbox_mode(True)
+    return exchange
