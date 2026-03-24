@@ -26,3 +26,4 @@ aiofiles==23.2.1
 
 # Phase 4 — AI analysis (Claude)
 openai>=1.30.0
+ccxt>=4.5.0
