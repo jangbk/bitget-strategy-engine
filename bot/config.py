@@ -6,7 +6,7 @@ All settings are read from environment variables (loaded from .env).
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 from dotenv import load_dotenv
 
@@ -166,7 +166,7 @@ class Config:
             self.validation_replay_max_steps = 0
 
 
-_config: Config | None = None
+_config: Optional[Config] = None
 
 
 def get_config() -> Config:
