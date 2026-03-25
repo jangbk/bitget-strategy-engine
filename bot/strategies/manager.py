@@ -29,10 +29,15 @@ from bot.strategies.opportunity_queue import OpportunityQueue
 from bot.strategies.strategy_health import StrategyHealthEngine
 from bot.market.symbol_universe import SymbolUniverse
 
-# v1.3 새 전략 3개
+# v1.3 기존 전략 3개
 from bot.strategies.overreaction_reversal import OverreactionReversalStrategy
 from bot.strategies.volatility_expansion_breakout import VolatilityExpansionBreakoutStrategy
 from bot.strategies.early_trend_capture import EarlyTrendCaptureStrategy
+
+# v1.4 고승률 전략 3개
+from bot.strategies.rsi3_reversal import RSI3ReversalStrategy
+from bot.strategies.vwap_bounce import VWAPBounceStrategy
+from bot.strategies.ema_pullback import EMAPullbackStrategy
 
 if TYPE_CHECKING:
     from bot.data.store import DataStore
@@ -67,11 +72,16 @@ class StrategyManager:
         self._scorer      = ScoringEngine()
         self._opp_queue   = OpportunityQueue(top_n_live=2)
 
-        # v1.3 전략 3개 (우선순위 순)
+        # v1.3 기존 전략 + v1.4 고승률 전략
         self._strategies: List[StrategyBase] = [
+            # v1.3 기존
             OverreactionReversalStrategy(),
             VolatilityExpansionBreakoutStrategy(),
             EarlyTrendCaptureStrategy(),
+            # v1.4 고승률 (R:R < 1.0, 작은 TP/넓은 SL)
+            RSI3ReversalStrategy(),
+            VWAPBounceStrategy(),
+            EMAPullbackStrategy(),
         ]
 
         self._state: Dict[str, dict] = {}
