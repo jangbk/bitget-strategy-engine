@@ -51,15 +51,15 @@ class OverreactionReversalStrategy(StrategyBase):
     ]
 
     RSI_PERIOD:          int   = 14
-    RSI_OVERSOLD:        float = 28.0
-    RSI_OVERBOUGHT:      float = 72.0
+    RSI_OVERSOLD:        float = 25.0   # 28 → 25 (더 극단적 과매도만 진입)
+    RSI_OVERBOUGHT:      float = 75.0   # 72 → 75 (더 극단적 과매수만 진입)
     EMA_LONG:            int   = 200
-    EMA_BAND_LOW:        float = 0.90   # EMA200 * 0.90 이상이어야
+    EMA_BAND_LOW:        float = 0.90
     EMA_BAND_HIGH:       float = 1.10
-    OVERREACTION_PCT:    float = 0.03   # 3% 급등/급락 캔들
+    OVERREACTION_PCT:    float = 0.04   # 0.03 → 0.04 (4% 이상 급등/급락만)
     LOOKBACK_BARS:       int   = 3
-    TP_PCT:              float = 0.025  # 2.5%
-    SL_PCT:              float = 0.012  # 1.2%
+    TP_PCT:              float = 0.015  # 0.025 → 0.015 (작은 TP, 빠른 확정)
+    SL_PCT:              float = 0.020  # 0.012 → 0.020 (넓은 SL, 숨쉴 공간)
     INTERVAL:            str   = "1h"
 
     def compute(self, store: "DataStore", regime: dict) -> List[Signal]:

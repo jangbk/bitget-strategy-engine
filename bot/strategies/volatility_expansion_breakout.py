@@ -54,9 +54,9 @@ class VolatilityExpansionBreakoutStrategy(StrategyBase):
     SQUEEZE_RATIO: float = 1.15
     # Expansion: 직전 봉 대비 BB 폭이 1.2배 이상
     EXPAND_RATIO:  float = 1.20
-    VOL_MULT:      float = 2.0     # 기존 1.5 → 2.0 (강화)
-    SL_OFFSET:     float = 0.005
-    TP_RATIO:      float = 0.80    # measured move의 80%만 목표
+    VOL_MULT:      float = 2.5     # 2.0 → 2.5 (거래량 필터 강화, 노이즈 제거)
+    SL_OFFSET:     float = 0.008   # 0.005 → 0.008 (SL 넓혀서 조기 청산 방지)
+    TP_RATIO:      float = 0.50    # 0.80 → 0.50 (작은 TP, 빠른 수익 확정 — R:R<1 최적)
     INTERVAL:      str   = "1h"
 
     def compute(self, store: "DataStore", regime: dict) -> List[Signal]:
