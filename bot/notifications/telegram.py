@@ -160,6 +160,8 @@ class TelegramNotifier:
     async def _do_send(self, text: str) -> bool:
         if not self._http or not self._enabled:
             return False
+        # 마크다운 테이블(| |) → 리스트 형식 변환
+        text = _sanitize_md_tables(text)
         url = f"/bot{self._token}/sendMessage"
         payload = {
             "chat_id": self._chat_id,
@@ -188,3 +190,31 @@ class TelegramNotifier:
 def _ts() -> str:
     import datetime
     return datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _sanitize_md_tables(text: str) -> str:
+    """마크다운 테이블(| col |)을 Telegram 호환 리스트로 변환."""
+    import re
+    lines = text.split("\n")
+    result: list[str] = []
+    i = 0
+    while i < len(lines):
+        s = lines[i].strip()
+        if s.startswith("|") and s.endswith("|") and s.count("|") >= 3:
+            tbl: list[str] = []
+            while i < len(lines) and lines[i].strip().startswith("|") and lines[i].strip().endswith("|"):
+                tbl.append(lines[i].strip())
+                i += 1
+            if len(tbl) >= 2:
+                headers = [c.strip() for c in tbl[0].split("|")[1:-1]]
+                start = 2 if len(tbl) > 1 and all(c in "-|: " for c in tbl[1]) else 1
+                for row in tbl[start:]:
+                    cells = [c.strip() for c in row.split("|")[1:-1]]
+                    parts = [f"{headers[j]}: {cells[j]}" for j in range(min(len(headers), len(cells))) if cells[j]]
+                    result.append("▸ " + " | ".join(parts))
+            else:
+                result.extend(tbl)
+            continue
+        result.append(lines[i])
+        i += 1
+    return "\n".join(result)
