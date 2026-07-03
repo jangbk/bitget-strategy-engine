@@ -1,0 +1,20 @@
+---
+description: Security checklist and review triggers — secrets, injection, auth, rate limiting
+alwaysApply: true
+---
+
+# Security
+
+## Mandatory checks before any commit
+- No hardcoded secrets (API keys, passwords, tokens) → use env vars or a secret manager.
+- Validate all user input. SQL injection prevention (parameterized queries). XSS prevention (sanitized HTML). CSRF protection.
+- Authentication/authorization verified. Rate limiting on all endpoints.
+- Error messages must not leak sensitive data.
+
+## Review with extra care when touching
+- Authentication/authorization, user input handling, database queries,
+  file system operations, external API calls, cryptography, payment/financial code.
+
+## Severity
+- CRITICAL (security vuln / data loss): block merge — must fix.
+- HIGH (bug / significant quality): fix before merge.

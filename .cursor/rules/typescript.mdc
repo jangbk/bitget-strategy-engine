@@ -1,0 +1,13 @@
+---
+description: TypeScript/JavaScript-specific standards
+globs: **/*.ts,**/*.tsx,**/*.js,**/*.jsx
+alwaysApply: false
+---
+
+# TypeScript / JavaScript
+
+- Strong typing — avoid `any`; prefer explicit types and discriminated unions.
+- Immutable patterns (spread/`readonly`), avoid in-place mutation.
+- Async correctness — await promises, handle rejections, no floating promises.
+- Node/web security — validate input, avoid injection, no secrets in client code.
+- Tests with the project's framework (Vitest/Jest/Playwright); 80%+ coverage.

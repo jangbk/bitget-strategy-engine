@@ -1,0 +1,11 @@
+---
+description: Testing requirements — TDD workflow, 80% coverage, unit/integration/E2E
+alwaysApply: true
+---
+
+# Testing
+
+- Minimum coverage: 80%. Include unit, integration, and E2E tests.
+- TDD workflow: write a failing test first (RED) → minimal implementation (GREEN) → refactor (IMPROVE) → verify coverage.
+- Fix the implementation, not the tests — unless the test itself is wrong.
+- Check test isolation and correct mocks when diagnosing failures.

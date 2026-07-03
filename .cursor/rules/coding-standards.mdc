@@ -1,0 +1,28 @@
+---
+description: Universal coding standards — immutability, file organization, error handling, input validation
+alwaysApply: true
+---
+
+# Coding Standards
+
+## Immutability (CRITICAL)
+- Never mutate existing objects. Always return a new copy with the change.
+- Rationale: prevents hidden side effects, easier debugging, safe concurrency.
+- Language note: for Go/Rust/etc. where idioms differ, follow the language-idiomatic mutation pattern.
+
+## File Organization
+- Many small files > few large files. High cohesion, low coupling.
+- 200–400 lines typical, 800 max. Extract utilities from large modules.
+- Organize by feature/domain, not by type.
+
+## Functions & Structure
+- Functions small (<50 lines). No deep nesting (>4 levels) — use early returns.
+- No hardcoded values — use constants or config.
+
+## Error Handling
+- Handle errors explicitly at every level. Never silently swallow.
+- User-friendly messages in UI-facing code; detailed logs on the server.
+
+## Input Validation
+- Validate all external input (API responses, user input, file content) at system boundaries.
+- Prefer schema-based validation. Fail fast with clear messages.

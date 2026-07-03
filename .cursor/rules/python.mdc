@@ -1,0 +1,13 @@
+---
+description: Python-specific standards
+globs: **/*.py
+alwaysApply: false
+---
+
+# Python
+
+- Follow PEP 8. Use type hints on public functions.
+- Prefer Pythonic idioms (comprehensions, context managers, dataclasses).
+- Validate external data with schema-based validation (e.g. pydantic).
+- Tests with pytest: fixtures, parametrization, mocking; target 80%+ coverage.
+- Handle exceptions explicitly; never bare `except:`.
