@@ -1,0 +1,47 @@
+# === Secrets — AI에 절대 전송 금지 ===
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+secrets/
+credentials*
+service-account*.json
+
+# === 의존성 ===
+node_modules/
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+vendor/
+
+# === 빌드 / 캐시 ===
+.next/
+dist/
+build/
+out/
+.vercel/
+.turbo/
+coverage/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+logs/
+
+# === 락파일 (AI에 노이즈) ===
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# === 대용량 데이터 (필요시 @로 직접 참조) ===
+*.csv
+*.parquet
+*.sqlite
+*.db
+
+# === OS / 에디터 ===
+.DS_Store
